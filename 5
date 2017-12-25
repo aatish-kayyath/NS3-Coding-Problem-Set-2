@@ -1,0 +1,144 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <cassert>
+
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/csma-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/internet-apps-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/flow-monitor-module.h"			//add - change_1
+
+using namespace ns3;
+
+NS_LOG_COMPONENT_DEFINE ("CsmaPingExample");
+
+//remove - change_2
+/*
+static void SinkRx (Ptr<const Packet> p, const Address &ad)
+{
+  //std::cout << *p << std::endl;
+}
+
+static void PingRtt (std::string context, Time rtt)
+{
+  //std::cout << context << " " << rtt << std::endl;
+}
+*/
+
+int
+main (int argc, char *argv[])
+{
+
+  CommandLine cmd;
+  cmd.Parse (argc, argv);
+	Time interPacketInterval = Seconds(1);					//chnge_3	
+  // Here, we will explicitly create four nodes.
+  NS_LOG_UNCOND ("Create nodes.");					//change from INFO to UNCOND - change_4
+  NodeContainer c;
+  c.Create (6);							//change_4
+
+  // connect all our nodes to a shared channel.
+  NS_LOG_UNCOND ("Build Topology.");					//change from INFO to UNCOND - change_5
+  CsmaHelper csma;
+  csma.SetChannelAttribute ("DataRate", DataRateValue (DataRate (5000000)));
+  csma.SetChannelAttribute ("Delay", TimeValue (MilliSeconds (2)));
+  csma.SetDeviceAttribute ("EncapsulationMode", StringValue ("Llc"));
+  NetDeviceContainer devs = csma.Install (c);
+
+  // add an ip stack to all nodes.
+  NS_LOG_UNCOND ("Add ip stack.");							//change from INFO to UNCOND - change_6
+  InternetStackHelper ipStack;
+  ipStack.Install (c);
+
+  // assign ip addresses
+  NS_LOG_UNCOND ("Assign ip addresses.");						//change from INFO to UNCOND - change_7
+  Ipv4AddressHelper ip;
+  ip.SetBase ("192.168.1.0", "255.255.255.0");
+  Ipv4InterfaceContainer addresses = ip.Assign (devs);
+
+  NS_LOG_UNCOND ("Create Source");								//change from INFO to UNCOND - change_8
+ // Config::SetDefault ("ns3::Ipv4RawSocketImpl::Protocol", StringValue ("2"));				remove this - change_9
+  InetSocketAddress dst = InetSocketAddress (addresses.GetAddress (3));
+  OnOffHelper onoff = OnOffHelper ("ns3::UdpSocketFactory", dst);			//change to UDP
+ // onoff.SetConstantRate (DataRate (15000));					//remove this - change_10
+  onoff.SetAttribute ("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));				//add this - change_12
+  onoff.SetAttribute ("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));				//add this - change_13
+  onoff.SetAttribute ("PacketSize", UintegerValue (1100));		//1100 to 1200 - change_11
+  onoff.SetAttribute("DataRate", StringValue("50Mbps"));			//add this - change_14
+
+  ApplicationContainer apps = onoff.Install (c.Get (0));
+  apps.Start (Seconds (1.0));
+  apps.Stop (Seconds (10.0));
+
+  NS_LOG_UNCOND ("Create Sink.");				//change_15
+  PacketSinkHelper sink = PacketSinkHelper ("ns3::UdpSocketFactory", dst);			//change 1st arg - chnage_16
+  apps = sink.Install (c.Get (3));
+  apps.Start (Seconds (0.0));
+  apps.Stop (Seconds (11.0));
+
+  NS_LOG_UNCOND ("Create pinger");				//change_16
+  V4PingHelper ping = V4PingHelper (addresses.GetAddress (0));			//change 2 to 0 -- change_17
+  NodeContainer pingers;
+  //change args and add 2 more pingers.add - change_18
+  pingers.Add (c.Get (3));
+  pingers.Add (c.Get (1));
+  pingers.Add (c.Get (2));
+  pingers.Add (c.Get (4));
+  pingers.Add (c.Get (5));
+  apps = ping.Install (pingers);
+  apps.Start (Seconds (2.0));
+  apps.Stop (Seconds (10.0));				//change to 10 - change_19
+
+  //remove-  change_20
+  /*
+  NS_LOG_INFO ("Configure Tracing.");				
+  // first, pcap tracing in non-promiscuous mode
+  csma.EnablePcapAll ("csma-ping", false);
+
+  // then, print what the packet sink receives.
+  Config::ConnectWithoutContext ("/NodeList/3/ApplicationList/0/$ns3::PacketSink/Rx", 
+                                 MakeCallback (&SinkRx));
+  // finally, print the ping rtts.
+  Config::Connect ("/NodeList/ApplicationList/$ns3::V4Ping/Rtt",
+                   MakeCallback (&PingRtt));
+
+  Packet::EnablePrinting ();
+
+
+  NS_LOG_INFO ("Run Simulation.");
+  Simulator::Run ();*/
+
+//add these lines - chnage_21
+
+  FlowMonitorHelper flowmon;
+  Ptr<FlowMonitor> monitor = flowmon.InstallAll();
+
+  Simulator::Stop (Seconds (10.0));					//change to 10 - chnage_22
+
+  NS_LOG_UNCOND("Run Simulation.");					//add this - chnage_23
+  Simulator::Run ();
+
+  monitor->CheckForLostPackets();					//add - change_24
+  Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier> (flowmon.GetClassifier ());
+  std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats ();
+	
+  //till here
+
+
+  //add for loop - change_25
+   for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator iter = stats.begin (); iter != stats.end (); ++iter)
+    {
+  Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (iter->first);
+      NS_LOG_UNCOND("Flow ID: " << iter->first << " Src Addr " << t.sourceAddress << " Dst Addr " << t.destinationAddress);
+      NS_LOG_UNCOND("Tx Packets = " << iter->second.txPackets);
+      NS_LOG_UNCOND("Rx Packets = " << iter->second.rxPackets);
+     // NS_LOG_UNCOND("lostPackets Packets = " << iter->second.lostPackets);			//remove this line - change_26
+      NS_LOG_UNCOND("Throughput: " << iter->second.rxBytes * 8.0 / (iter->second.timeLastRxPacket.GetSeconds()-iter->second.timeFirstTxPacket.GetSeconds()) / 1024  << " Kbps");
+    }
+
+  Simulator::Destroy ();
+  NS_LOG_UNCOND ("Done.");				//change_25
+}
